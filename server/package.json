@@ -1,0 +1,44 @@
+{
+  "name": "teamflow-server",
+  "version": "1.0.0",
+  "description": "Backend API for TeamFlow SaaS",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed": "node src/scripts/seed.js",
+    "test:phase3": "node src/scripts/testPhase3.js",
+    "test:phase4": "node src/scripts/testPhase4.js",
+    "test:phase5": "node src/scripts/testPhase5.js",
+    "test:phase6": "node src/scripts/testPhase6.js",
+    "test:limits": "node src/scripts/testPlanLimits.js",
+    "test:employees": "node src/scripts/testEmployeeManagement.js",
+    "test:requirements": "node src/scripts/testNewRequirements.js",
+    "test:workflow": "node src/scripts/testFinalWorkflow.js",
+    "test": "node src/scripts/testNewRequirements.js"
+  },
+  "keywords": [
+    "teamflow",
+    "mern",
+    "saas",
+    "express",
+    "mongodb"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-validator": "^7.3.2",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.9.5",
+    "morgan": "^1.12.1",
+    "nodemailer": "^10.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
