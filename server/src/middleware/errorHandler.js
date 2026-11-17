@@ -8,6 +8,18 @@ const errorHandler = (err, req, res, next) => {
   let statusCode = err.statusCode || (res.statusCode === 200 ? 500 : res.statusCode);
   let message = err.message || 'Internal Server Error';
 
+  // Multer File Upload Errors
+  if (err.name === 'MulterError') {
+    statusCode = 400;
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      message = 'File size limit exceeded. Maximum allowed size is 5 MB.';
+    } else if (err.code === 'LIMIT_FILE_COUNT') {
+      message = 'Too many files uploaded. Maximum 5 files per request.';
+    } else {
+      message = `Upload error: ${err.message}`;
+    }
+  }
+
   // Express-Validator Bad Request (if passed to next with err.errors)
   if (err.array && typeof err.array === 'function') {
     statusCode = 400;

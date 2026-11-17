@@ -66,6 +66,38 @@ const taskSchema = new mongoose.Schema(
       ref: 'User',
       required: [true, 'Creator user ID is required'],
     },
+    // Phase 4: Task File Attachments (Metadata only, binaries stored on disk)
+    attachments: [
+      {
+        originalName: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        storedName: {
+          type: String,
+          required: true,
+          unique: false,
+        },
+        mimeType: {
+          type: String,
+          required: true,
+        },
+        size: {
+          type: Number,
+          required: true,
+        },
+        uploadedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     timestamps: true,

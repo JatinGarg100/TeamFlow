@@ -718,10 +718,255 @@ const getProjectProgress = async (req, res, next) => {
   }
 };
 
+const fs = require('fs');
+const path = require('path');
+const { uploadDir } = require('../middleware/uploadMiddleware');
+
+/**
+ * POST /api/tasks/:taskId/attachments
+ * -----------------------------------
+ * Uploads one or multiple files as attachments to a task.
+ * Rules:
+ * - User must belong to the organisation owning the task.
+ * - Files are written to disk with secure random filenames.
+ * - Metadata is pushed to task.attachments in MongoDB.
+ * - If a database error occurs, uploaded files on disk are safely rolled back/cleaned up.
+ */
+const uploadTaskAttachments = async (req, res, next) => {
+  const uploadedFiles = req.files || (req.file ? [req.file] : []);
+
+  try {
+    const { taskId } = req.params;
+
+    if (!uploadedFiles || uploadedFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'No file uploaded. Please select a valid document or image.' },
+      });
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      // Clean up uploaded files since task doesn't exist
+      for (const file of uploadedFiles) {
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      }
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Task not found.' },
+      });
+    }
+
+    // Verify user belongs to task's organisation
+    const membership = await Membership.findOne({
+      orgId: task.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      for (const file of uploadedFiles) {
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      }
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this task.' },
+      });
+    }
+
+    // Create attachment metadata records
+    const newAttachments = uploadedFiles.map((file) => ({
+      originalName: file.originalname,
+      storedName: file.filename,
+      mimeType: file.mimetype,
+      size: file.size,
+      uploadedBy: req.user._id,
+      uploadedAt: new Date(),
+    }));
+
+    task.attachments.push(...newAttachments);
+    await task.save();
+
+    // Populate uploader details for response
+    const updatedTask = await Task.findById(task._id)
+      .populate('attachments.uploadedBy', 'name email');
+
+    res.status(201).json({
+      success: true,
+      message: `Successfully uploaded ${uploadedFiles.length} file(s).`,
+      attachments: updatedTask.attachments,
+    });
+  } catch (error) {
+    // Rollback uploaded files on disk in case of database or runtime error
+    for (const file of uploadedFiles) {
+      if (file.path && fs.existsSync(file.path)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (cleanupErr) {
+          console.warn('[Cleanup Error] Could not delete file:', file.path);
+        }
+      }
+    }
+    next(error);
+  }
+};
+
+/**
+ * GET /api/tasks/:taskId/attachments/:attachmentId
+ * ------------------------------------------------
+ * Serves an attachment file for viewing or downloading.
+ * Rules:
+ * - User must belong to the organisation.
+ * - Prevents path traversal using strict basename resolution.
+ * - Sets safe Content-Disposition and MIME headers.
+ */
+const downloadTaskAttachment = async (req, res, next) => {
+  try {
+    const { taskId, attachmentId } = req.params;
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Task not found.' },
+      });
+    }
+
+    // Verify user belongs to the organisation
+    const membership = await Membership.findOne({
+      orgId: task.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this task.' },
+      });
+    }
+
+    // Find attachment subdocument
+    const attachment = task.attachments.id(attachmentId);
+    if (!attachment) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Attachment not found.' },
+      });
+    }
+
+    // Secure path resolution: ensure it stays within uploadDir
+    const safeFilename = path.basename(attachment.storedName);
+    const filePath = path.join(uploadDir, safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Attachment file does not exist on disk.' },
+      });
+    }
+
+    // Query param ?download=true forces download, otherwise preview/inline
+    const isDownload = req.query.download === 'true';
+    const disposition = isDownload ? 'attachment' : 'inline';
+
+    res.setHeader('Content-Type', attachment.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename="${encodeURIComponent(attachment.originalName)}"`
+    );
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    const readStream = fs.createReadStream(filePath);
+    readStream.pipe(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/tasks/:taskId/attachments/:attachmentId
+ * ---------------------------------------------------
+ * Removes an attachment from MongoDB and deletes the physical file from disk.
+ * Rules:
+ * - User must belong to organisation.
+ * - Only the uploader, task manager, or organisation admin/owner may delete attachments.
+ */
+const deleteTaskAttachment = async (req, res, next) => {
+  try {
+    const { taskId, attachmentId } = req.params;
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Task not found.' },
+      });
+    }
+
+    // Check membership
+    const membership = await Membership.findOne({
+      orgId: task.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this task.' },
+      });
+    }
+
+    const attachment = task.attachments.id(attachmentId);
+    if (!attachment) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Attachment not found on this task.' },
+      });
+    }
+
+    // Permission check: uploader or admin/owner
+    const isUploader = attachment.uploadedBy.toString() === req.user._id.toString();
+    const isAdminOrOwner = ['owner', 'admin'].includes(membership.role);
+
+    if (!isUploader && !isAdminOrOwner) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'You do not have permission to delete this attachment.' },
+      });
+    }
+
+    // Delete file from disk safely
+    const safeFilename = path.basename(attachment.storedName);
+    const filePath = path.join(uploadDir, safeFilename);
+
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (fsErr) {
+        console.warn('[Attachment Delete Warning] Could not delete file from disk:', fsErr.message);
+      }
+    }
+
+    // Remove subdocument from MongoDB
+    task.attachments.pull(attachmentId);
+    await task.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Attachment deleted successfully.',
+      attachmentId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProjectTasks,
   getMyTasks,
   createTask,
   updateTask,
   getProjectProgress,
+  uploadTaskAttachments,
+  downloadTaskAttachment,
+  deleteTaskAttachment,
 };

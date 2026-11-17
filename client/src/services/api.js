@@ -380,6 +380,49 @@ export const updateTaskApi = async (taskId, updates) => {
   return data.task;
 };
 
+/* ── Task Attachments Endpoints (Phase 4) ──────── */
+export const uploadTaskAttachmentsApi = async (taskId, formData) => {
+  const auth = getStoredAuth();
+  const headers = {};
+  if (auth?.token) {
+    headers['Authorization'] = `Bearer ${auth.token}`;
+  }
+  // Note: Do NOT set Content-Type header when sending FormData; browser sets multipart/form-data with boundary
+
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to upload attachments');
+  }
+
+  return data.attachments || [];
+};
+
+export const getTaskAttachmentDownloadUrl = (taskId, attachmentId, download = false) => {
+  return `${API_BASE_URL}/tasks/${taskId}/attachments/${attachmentId}${download ? '?download=true' : ''}`;
+};
+
+export const deleteTaskAttachmentApi = async (taskId, attachmentId) => {
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments/${attachmentId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to delete attachment');
+  }
+
+  return data;
+};
+
 export const fetchMyTasksApi = async (params = {}) => {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set('page', params.page);

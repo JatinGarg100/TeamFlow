@@ -13,6 +13,7 @@ import {
   fetchOrgMembers,
   getStoredAuth,
 } from '../services/api';
+import TaskAttachmentsModal from '../components/TaskAttachmentsModal';
 
 /**
  * ProjectDetails page
@@ -78,6 +79,9 @@ function ProjectDetails() {
     dueDate: '',
     status: 'To Do',
   });
+
+  // Task Attachments Modal State (Phase 4)
+  const [attachmentModalTask, setAttachmentModalTask] = useState(null);
 
   const auth = getStoredAuth();
   const currentUserId = auth?.user?.id || auth?.user?._id;
@@ -733,17 +737,34 @@ function ProjectDetails() {
                           <TaskStatusBadge status={task.status} />
                         </button>
                       </td>
-                      {isManager && (
-                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {/* File Attachments Button */}
                           <button
                             type="button"
-                            onClick={() => handleOpenEditTask(task)}
-                            className="rounded-lg border border-[#E2E8F0] px-2.5 py-1 text-xs font-medium text-[#64748B] hover:border-[#5B4BDB] hover:text-[#5B4BDB] transition-colors"
+                            onClick={() => setAttachmentModalTask(task)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-2.5 py-1 text-xs font-medium text-[#5B4BDB] hover:bg-[#EEEDFD]/50 transition-colors cursor-pointer"
+                            title="Manage task attachments"
                           >
-                            Edit
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                            </svg>
+                            <span>
+                              Files {task.attachments?.length > 0 && `(${task.attachments.length})`}
+                            </span>
                           </button>
-                        </td>
-                      )}
+
+                          {isManager && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditTask(task)}
+                              className="rounded-lg border border-[#E2E8F0] px-2.5 py-1 text-xs font-medium text-[#64748B] hover:border-[#5B4BDB] hover:text-[#5B4BDB] transition-colors cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1210,6 +1231,21 @@ function ProjectDetails() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ── Task File Attachments Modal (Phase 4) ── */}
+      {attachmentModalTask && (
+        <TaskAttachmentsModal
+          task={attachmentModalTask}
+          canDelete={isManager}
+          onClose={() => setAttachmentModalTask(null)}
+          onAttachmentsUpdated={(taskId, updatedAttachments) => {
+            setTasks((prev) =>
+              prev.map((t) => (t._id === taskId ? { ...t, attachments: updatedAttachments } : t))
+            );
+            setAttachmentModalTask((prev) => (prev ? { ...prev, attachments: updatedAttachments } : null));
+          }}
+        />
       )}
     </div>
   );
