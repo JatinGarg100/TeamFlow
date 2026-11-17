@@ -9,6 +9,10 @@ node_modules/
 */.env
 */.env.local
 
+# Local file uploads
+server/uploads/
+uploads/
+
 # Production builds
 dist/
 build/
