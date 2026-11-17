@@ -512,6 +512,20 @@ const updateTask = async (req, res, next) => {
  * Progress = completed tasks / total tasks × 100.
  * If total tasks is 0, progress is 0%.
  */
+/**
+ * GET /api/projects/:projectId/progress
+ * -------------------------------------
+ * TASK 7: MongoDB Aggregation
+ * Computes comprehensive task progress breakdown using an aggregation pipeline:
+ * - totalTasks
+ * - completedTasks
+ * - inProgressTasks
+ * - todoTasks
+ * - pendingTasks
+ * - percentage
+ *
+ * Replaces multiple separate countDocuments queries with a single atomic aggregation pipeline.
+ */
 const getProjectProgress = async (req, res, next) => {
   try {
     const { projectId } = req.params;
@@ -544,22 +558,50 @@ const getProjectProgress = async (req, res, next) => {
       });
     }
 
-    // Calculate metrics directly from actual Task documents in MongoDB
-    const totalTasks = await Task.countDocuments({ projectId: project._id });
-    const completedTasks = await Task.countDocuments({
-      projectId: project._id,
-      status: 'Completed',
-    });
+    // TASK 7: Single-pass MongoDB Aggregation pipeline for project metrics
+    const stats = await Task.aggregate([
+      { $match: { projectId: new mongoose.Types.ObjectId(projectId) } },
+      {
+        $group: {
+          _id: null,
+          totalTasks: { $sum: 1 },
+          completedTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] },
+          },
+          inProgressTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] },
+          },
+          todoTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'To Do'] }, 1, 0] },
+          },
+          pendingTasks: {
+            $sum: { $cond: [{ $ne: ['$status', 'Completed'] }, 1, 0] },
+          },
+        },
+      },
+    ]);
 
-    const pendingTasks = totalTasks - completedTasks;
-    const percentage = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+    const result = stats[0] || {
+      totalTasks: 0,
+      completedTasks: 0,
+      inProgressTasks: 0,
+      todoTasks: 0,
+      pendingTasks: 0,
+    };
+
+    const percentage =
+      result.totalTasks === 0
+        ? 0
+        : Math.round((result.completedTasks / result.totalTasks) * 100);
 
     res.status(200).json({
       success: true,
       projectId: project._id,
-      totalTasks,
-      completedTasks,
-      pendingTasks,
+      totalTasks: result.totalTasks,
+      completedTasks: result.completedTasks,
+      inProgressTasks: result.inProgressTasks,
+      todoTasks: result.todoTasks,
+      pendingTasks: result.pendingTasks,
       percentage,
     });
   } catch (error) {

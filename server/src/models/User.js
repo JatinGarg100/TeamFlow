@@ -31,8 +31,35 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
+
+/**
+ * TASK 1: Mongoose Virtuals
+ * -------------------------
+ * initials: Computes uppercase initials from user's full name (e.g. "Rahul Sharma" -> "RS")
+ * Useful for avatar badges without storing redundant fields in MongoDB.
+ */
+userSchema.virtual('initials').get(function () {
+  if (!this.name) return '';
+  const parts = this.name.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].substring(0, 2).toUpperCase();
+  }
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+});
+
+/**
+ * TASK 2: Mongoose Static Methods
+ * -------------------------------
+ * User.findByEmail(email): Case-insensitive lookup for an existing user account.
+ */
+userSchema.statics.findByEmail = function (email) {
+  if (!email) return null;
+  return this.findOne({ email: email.toLowerCase().trim() });
+};
 
 const User = mongoose.model('User', userSchema);
 
