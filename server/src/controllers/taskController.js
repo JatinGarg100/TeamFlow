@@ -289,11 +289,18 @@ const createTask = async (req, res, next) => {
           });
         }
 
-        // Verify user belongs to this organisation
-        const isOrgMember = await Membership.findOne({
+        // Verify user belongs to this organisation (allow both User ID or Membership ID)
+        let isOrgMember = await Membership.findOne({
           orgId: project.orgId,
           userId: id,
         });
+
+        if (!isOrgMember) {
+          isOrgMember = await Membership.findOne({
+            orgId: project.orgId,
+            _id: id,
+          });
+        }
 
         if (!isOrgMember) {
           return res.status(400).json({
@@ -302,17 +309,19 @@ const createTask = async (req, res, next) => {
           });
         }
 
+        const actualUserId = isOrgMember.userId.toString();
+
         // Auto-add employee to project.teamMembers if not already present
         const isTeamMember = project.teamMembers.some(
-          (memberId) => memberId.toString() === id.toString()
+          (memberId) => memberId.toString() === actualUserId
         );
 
         if (!isTeamMember) {
-          project.teamMembers.push(id);
+          project.teamMembers.push(actualUserId);
           await project.save();
         }
 
-        validAssigneeIds.push(id.toString());
+        validAssigneeIds.push(actualUserId);
       }
 
       // Deduplicate
