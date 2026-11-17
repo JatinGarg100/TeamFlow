@@ -2,20 +2,51 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const plansConfig = require('../config/plans');
 const { User, Membership, Organisation, Project, Task, Invitation } = require('../models');
+const { parsePagination, formatPaginatedResponse, escapeRegex } = require('../utils/pagination');
 
 /**
  * GET /api/orgs/:orgId/members
  * ----------------------------
- * Lists all active employees/members in the specified organisation.
+ * Lists employees/members in the specified organisation with:
+ * - Pagination (?page=1&limit=10)
+ * - Filtering by role (?role=admin|member|manager|owner)
+ * - Search by employee name or email (?search=keyword)
  * Protected by requireAuth and requireOrgAccess.
  */
 const getMembers = async (req, res, next) => {
   try {
     const { orgId } = req.params;
 
-    const memberships = await Membership.find({ orgId })
-      .populate('userId', 'name email createdAt')
-      .sort({ createdAt: 1 });
+    const filter = { orgId };
+
+    if (req.query.role && ['owner', 'admin', 'manager', 'member'].includes(req.query.role)) {
+      filter.role = req.query.role;
+    }
+
+    // Search by name or email across User model
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const sanitized = escapeRegex(req.query.search.trim());
+      const matchingUsers = await User.find({
+        $or: [
+          { name: { $regex: sanitized, $options: 'i' } },
+          { email: { $regex: sanitized, $options: 'i' } },
+        ],
+      }).select('_id');
+
+      const userIds = matchingUsers.map((u) => u._id);
+      filter.userId = { $in: userIds };
+    }
+
+    const { page, limit, skip } = parsePagination(req.query, 10, 50);
+
+    const [totalItems, memberships] = await Promise.all([
+      Membership.countDocuments(filter),
+      Membership.find(filter)
+        .populate('userId', 'name email createdAt')
+        .sort({ createdAt: 1 })
+        .skip(skip)
+        .limit(limit),
+    ]);
 
     const members = memberships
       .filter((m) => m.userId) // Ensure user document exists
@@ -31,11 +62,18 @@ const getMembers = async (req, res, next) => {
         joinedAt: m.createdAt,
       }));
 
-    res.status(200).json({
-      success: true,
-      count: members.length,
-      members,
-    });
+    res.status(200).json(
+      formatPaginatedResponse({
+        data: members,
+        totalItems,
+        page,
+        limit,
+        extra: {
+          count: members.length,
+          members,
+        },
+      })
+    );
   } catch (error) {
     next(error);
   }

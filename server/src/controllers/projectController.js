@@ -1,13 +1,18 @@
 const mongoose = require('mongoose');
 const plansConfig = require('../config/plans');
 const { Project, Membership, Organisation } = require('../models');
+const { parsePagination, formatPaginatedResponse, escapeRegex } = require('../utils/pagination');
 
 /**
  * GET /api/projects
  * -----------------
- * Lists all projects for the authenticated user's organisation.
- * If ?orgId= is provided, verifies user's membership in that organisation.
- * Otherwise, retrieves projects for all organisations the user belongs to.
+ * Lists all projects for the authenticated user's organisation with:
+ * - Pagination (?page=1&limit=10)
+ * - Search (?search=keyword in name or description)
+ * - Filtering (?status=Planning|In Progress|Completed)
+ * - Sorting (?sortBy=createdAt|name|deadline&sortOrder=asc|desc)
+ *
+ * Scoped strictly to the authenticated user's verified organisation.
  */
 const getProjects = async (req, res, next) => {
   try {
@@ -43,16 +48,57 @@ const getProjects = async (req, res, next) => {
       targetOrgIds = userMemberships.map((m) => m.orgId);
     }
 
-    const projects = await Project.find({ orgId: { $in: targetOrgIds } })
-      .populate('teamMembers', 'name email role')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+    // Build scoped query filter
+    const filter = {
+      orgId: { $in: targetOrgIds },
+    };
 
-    res.status(200).json({
-      success: true,
-      count: projects.length,
-      projects,
-    });
+    // Filter by status if provided
+    if (req.query.status && ['Planning', 'In Progress', 'Completed'].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    // Keyword search in project name or description
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const sanitizedSearch = escapeRegex(req.query.search.trim());
+      filter.$or = [
+        { name: { $regex: sanitizedSearch, $options: 'i' } },
+        { description: { $regex: sanitizedSearch, $options: 'i' } },
+      ];
+    }
+
+    // Sorting
+    const allowedSortFields = ['createdAt', 'name', 'deadline', 'status'];
+    const sortBy = allowedSortFields.includes(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortBy]: sortOrder };
+
+    // Pagination
+    const { page, limit, skip } = parsePagination(req.query, 10, 50);
+
+    const [totalItems, projects] = await Promise.all([
+      Project.countDocuments(filter),
+      Project.find(filter)
+        .populate('teamMembers', 'name email role')
+        .populate('createdBy', 'name email')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
+    ]);
+
+    // Format response with both `data` and `projects` (for backward compatibility with existing tests/UI)
+    res.status(200).json(
+      formatPaginatedResponse({
+        data: projects,
+        totalItems,
+        page,
+        limit,
+        extra: {
+          count: projects.length,
+          projects,
+        },
+      })
+    );
   } catch (error) {
     next(error);
   }

@@ -1,11 +1,17 @@
 const mongoose = require('mongoose');
 const { Task, Project, Membership, User } = require('../models');
 const { sendTaskAssignmentEmail } = require('../services/mailer');
+const { parsePagination, formatPaginatedResponse, escapeRegex } = require('../utils/pagination');
 
 /**
  * GET /api/projects/:projectId/tasks
  * ----------------------------------
- * Retrieves all tasks for a project.
+ * Retrieves tasks for a project with:
+ * - Pagination (?page=1&limit=10)
+ * - Search (?search=keyword in title or description)
+ * - Filtering (?status=...&priority=...&assignedTo=...)
+ * - Sorting (?sortBy=createdAt|dueDate|priority|status&sortOrder=asc|desc)
+ *
  * Verified: Authenticated user must belong to the organisation owning the project.
  */
 const getProjectTasks = async (req, res, next) => {
@@ -40,16 +46,74 @@ const getProjectTasks = async (req, res, next) => {
       });
     }
 
-    const tasks = await Task.find({ projectId: project._id })
-      .populate('assignedTo', 'name email role')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+    // Build filter
+    const filter = {
+      projectId: project._id,
+    };
 
-    res.status(200).json({
-      success: true,
-      count: tasks.length,
-      tasks,
-    });
+    if (req.query.status && ['To Do', 'In Progress', 'Completed', 'Pending'].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    if (req.query.priority && ['Low', 'Medium', 'High'].includes(req.query.priority)) {
+      filter.priority = req.query.priority;
+    }
+
+    if (req.query.assignedTo && mongoose.Types.ObjectId.isValid(req.query.assignedTo)) {
+      filter.assignedTo = new mongoose.Types.ObjectId(req.query.assignedTo);
+    }
+
+    // Due date range filtering
+    if (req.query.dueBefore || req.query.dueAfter) {
+      filter.dueDate = {};
+      if (req.query.dueBefore) {
+        filter.dueDate.$lte = new Date(req.query.dueBefore);
+      }
+      if (req.query.dueAfter) {
+        filter.dueDate.$gte = new Date(req.query.dueAfter);
+      }
+    }
+
+    // Search keyword
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const sanitized = escapeRegex(req.query.search.trim());
+      filter.$or = [
+        { title: { $regex: sanitized, $options: 'i' } },
+        { description: { $regex: sanitized, $options: 'i' } },
+      ];
+    }
+
+    // Sorting
+    const allowedSortFields = ['createdAt', 'dueDate', 'priority', 'status', 'title'];
+    const sortBy = allowedSortFields.includes(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortBy]: sortOrder };
+
+    // Pagination
+    const { page, limit, skip } = parsePagination(req.query, 10, 50);
+
+    const [totalItems, tasks] = await Promise.all([
+      Task.countDocuments(filter),
+      Task.find(filter)
+        .populate('assignedTo', 'name email role')
+        .populate('createdBy', 'name email')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
+    ]);
+
+    res.status(200).json(
+      formatPaginatedResponse({
+        data: tasks,
+        totalItems,
+        page,
+        limit,
+        extra: {
+          count: tasks.length,
+          tasks,
+        },
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -58,7 +122,10 @@ const getProjectTasks = async (req, res, next) => {
 /**
  * GET /api/tasks/my
  * -----------------
- * Retrieves all tasks assigned to the current authenticated employee across all projects.
+ * Retrieves all tasks assigned to the current authenticated employee across all projects with:
+ * - Pagination (?page=1&limit=10)
+ * - Filtering (?status=...&priority=...&projectId=...)
+ * - Search (?search=keyword)
  */
 const getMyTasks = async (req, res, next) => {
   try {
@@ -67,20 +134,62 @@ const getMyTasks = async (req, res, next) => {
     const orgIds = userMemberships.map((m) => m.orgId);
 
     // Query tasks where current user is in assignedTo array
-    const tasks = await Task.find({
+    const filter = {
       orgId: { $in: orgIds },
       assignedTo: req.user._id,
-    })
-      .populate('projectId', 'name status deadline')
-      .populate('assignedTo', 'name email role')
-      .populate('createdBy', 'name email')
-      .sort({ updatedAt: -1 });
+    };
 
-    res.status(200).json({
-      success: true,
-      count: tasks.length,
-      tasks,
-    });
+    if (req.query.status && ['To Do', 'In Progress', 'Completed', 'Pending'].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    if (req.query.priority && ['Low', 'Medium', 'High'].includes(req.query.priority)) {
+      filter.priority = req.query.priority;
+    }
+
+    if (req.query.projectId && mongoose.Types.ObjectId.isValid(req.query.projectId)) {
+      filter.projectId = new mongoose.Types.ObjectId(req.query.projectId);
+    }
+
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const sanitized = escapeRegex(req.query.search.trim());
+      filter.$or = [
+        { title: { $regex: sanitized, $options: 'i' } },
+        { description: { $regex: sanitized, $options: 'i' } },
+      ];
+    }
+
+    // Sorting
+    const allowedSortFields = ['createdAt', 'updatedAt', 'dueDate', 'priority', 'status'];
+    const sortBy = allowedSortFields.includes(req.query.sortBy) ? req.query.sortBy : 'updatedAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortBy]: sortOrder };
+
+    const { page, limit, skip } = parsePagination(req.query, 10, 50);
+
+    const [totalItems, tasks] = await Promise.all([
+      Task.countDocuments(filter),
+      Task.find(filter)
+        .populate('projectId', 'name status deadline')
+        .populate('assignedTo', 'name email role')
+        .populate('createdBy', 'name email')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
+    ]);
+
+    res.status(200).json(
+      formatPaginatedResponse({
+        data: tasks,
+        totalItems,
+        page,
+        limit,
+        extra: {
+          count: tasks.length,
+          tasks,
+        },
+      })
+    );
   } catch (error) {
     next(error);
   }
