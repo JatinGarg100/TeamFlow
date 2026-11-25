@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const { Task, Project, Membership, User } = require('../models');
 const { sendTaskAssignmentEmail } = require('../services/mailer');
+const { createNotification } = require('../services/notificationService');
 const { parsePagination, formatPaginatedResponse, escapeRegex } = require('../utils/pagination');
+const { logActivity } = require('../services/activityLog.service');
 
 /**
  * GET /api/projects/:projectId/tasks
@@ -63,8 +65,15 @@ const getProjectTasks = async (req, res, next) => {
       filter.assignedTo = new mongoose.Types.ObjectId(req.query.assignedTo);
     }
 
-    // Due date range filtering
-    if (req.query.dueBefore || req.query.dueAfter) {
+    // Overdue & Due Date Filters
+    if (req.query.overdue === 'true' || req.query.dueDateFilter === 'overdue') {
+      filter.dueDate = { $lt: new Date() };
+      filter.status = { $ne: 'Completed' };
+    } else if (req.query.dueDateFilter === 'upcoming') {
+      filter.dueDate = { $gte: new Date(new Date().setHours(0, 0, 0, 0)) };
+    } else if (req.query.dueDateFilter === 'past_due') {
+      filter.dueDate = { $lt: new Date() };
+    } else if (req.query.dueBefore || req.query.dueAfter) {
       filter.dueDate = {};
       if (req.query.dueBefore) {
         filter.dueDate.$lte = new Date(req.query.dueBefore);
@@ -129,22 +138,79 @@ const getProjectTasks = async (req, res, next) => {
  */
 const getMyTasks = async (req, res, next) => {
   try {
+    if (req.query.orgId && !mongoose.Types.ObjectId.isValid(req.query.orgId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid organisation ID format.' },
+      });
+    }
+
     // Find all organisations user belongs to
     const userMemberships = await Membership.find({ userId: req.user._id });
     const orgIds = userMemberships.map((m) => m.orgId);
 
-    // Query tasks where current user is in assignedTo array
-    const filter = {
-      orgId: { $in: orgIds },
-      assignedTo: req.user._id,
-    };
+    // Organisation scoping
+    let targetOrgFilter = { $in: orgIds };
+    let activeMembership = userMemberships[0];
 
-    if (req.query.status && ['To Do', 'In Progress', 'Completed', 'Pending'].includes(req.query.status)) {
-      filter.status = req.query.status;
+    if (req.query.orgId) {
+      const matched = userMemberships.find((m) => m.orgId.toString() === req.query.orgId);
+      if (!matched) {
+        return res.status(403).json({
+          success: false,
+          error: { message: 'Access denied. You do not belong to this organisation.' },
+        });
+      }
+      targetOrgFilter = new mongoose.Types.ObjectId(req.query.orgId);
+      activeMembership = matched;
     }
 
+    const isManager = activeMembership && ['owner', 'admin', 'manager'].includes(activeMembership.role);
+
+    // Query filter
+    const filter = {
+      orgId: targetOrgFilter,
+    };
+
+    // Assignee filtering: Default to current user; allow managers or specific queries to filter by assignee
+    if (req.query.assignedTo) {
+      if (req.query.assignedTo === 'all' && isManager) {
+        // Managers can view all tasks in the organisation
+      } else if (mongoose.Types.ObjectId.isValid(req.query.assignedTo)) {
+        filter.assignedTo = new mongoose.Types.ObjectId(req.query.assignedTo);
+      } else {
+        filter.assignedTo = req.user._id;
+      }
+    } else {
+      filter.assignedTo = req.user._id;
+    }
+
+    // Status filtering
+    if (req.query.status && ['To Do', 'In Progress', 'Completed', 'Pending'].includes(req.query.status)) {
+      filter.status = req.query.status === 'Pending' ? 'To Do' : req.query.status;
+    }
+
+    // Priority filtering
     if (req.query.priority && ['Low', 'Medium', 'High'].includes(req.query.priority)) {
       filter.priority = req.query.priority;
+    }
+
+    // Overdue & Due Date Filters
+    if (req.query.overdue === 'true' || req.query.dueDateFilter === 'overdue') {
+      filter.dueDate = { $lt: new Date() };
+      filter.status = { $ne: 'Completed' };
+    } else if (req.query.dueDateFilter === 'upcoming') {
+      filter.dueDate = { $gte: new Date(new Date().setHours(0, 0, 0, 0)) };
+    } else if (req.query.dueDateFilter === 'past_due') {
+      filter.dueDate = { $lt: new Date() };
+    } else if (req.query.dueBefore || req.query.dueAfter) {
+      filter.dueDate = {};
+      if (req.query.dueBefore) {
+        filter.dueDate.$lte = new Date(req.query.dueBefore);
+      }
+      if (req.query.dueAfter) {
+        filter.dueDate.$gte = new Date(req.query.dueAfter);
+      }
     }
 
     if (req.query.projectId && mongoose.Types.ObjectId.isValid(req.query.projectId)) {
@@ -345,8 +411,38 @@ const createTask = async (req, res, next) => {
       .populate('assignedTo', 'name email role')
       .populate('createdBy', 'name email');
 
-    // 8. Send Email Notifications to newly assigned employees (non-blocking)
+    // Record activity
+    await logActivity({
+      orgId: project.orgId,
+      projectId: project._id,
+      taskId: task._id,
+      user: req.user,
+      action: 'TASK_CREATED',
+      description: `${req.user.name} created task "${task.title}".`,
+      metadata: {
+        projectName: project.name,
+        taskTitle: task.title,
+        priority: task.priority,
+        status: task.status,
+      },
+    });
+
+    // 8. Send In-App & Email Notifications to newly assigned employees (non-blocking)
     if (validAssigneeIds.length > 0) {
+      // In-app notifications
+      for (const assigneeId of validAssigneeIds) {
+        createNotification({
+          recipient: assigneeId,
+          orgId: project.orgId,
+          sender: req.user._id,
+          type: 'TASK_ASSIGNED',
+          title: `New task assigned: ${task.title}`,
+          message: `${req.user.name} assigned you to "${task.title}" in project "${project.name}".`,
+          link: `/projects/${project._id}?task=${task._id}`,
+          metadata: { taskId: task._id, projectId: project._id },
+        });
+      }
+
       (async () => {
         try {
           const assignees = await User.find({ _id: { $in: validAssigneeIds } });
@@ -449,6 +545,7 @@ const updateTask = async (req, res, next) => {
     }
 
     const { title, description, priority, dueDate, status, assignedTo } = req.body;
+    const previousStatus = task.status;
 
     // Status update (Shared status: updates task for everyone)
     if (status !== undefined) {
@@ -590,6 +687,19 @@ const updateTask = async (req, res, next) => {
 
     // Notify newly added assignees only (avoiding duplicates)
     if (newlyAddedAssigneeIds.length > 0) {
+      for (const assigneeId of newlyAddedAssigneeIds) {
+        createNotification({
+          recipient: assigneeId,
+          orgId: task.orgId,
+          sender: req.user._id,
+          type: 'TASK_ASSIGNED',
+          title: `Assigned to task: ${task.title}`,
+          message: `${req.user.name} assigned you to "${task.title}".`,
+          link: `/projects/${task.projectId}?task=${task._id}`,
+          metadata: { taskId: task._id, projectId: task.projectId },
+        });
+      }
+
       (async () => {
         try {
           const project = await Project.findById(task.projectId);
@@ -612,6 +722,59 @@ const updateTask = async (req, res, next) => {
         }
       })();
     }
+
+    // In-app notification for status change
+    if (previousStatus !== task.status) {
+      const recipientsToNotify = new Set();
+      if (task.createdBy) recipientsToNotify.add(task.createdBy.toString());
+      if (Array.isArray(task.assignedTo)) {
+        task.assignedTo.forEach((a) => recipientsToNotify.add(a.toString()));
+      }
+      for (const rId of recipientsToNotify) {
+        createNotification({
+          recipient: rId,
+          orgId: task.orgId,
+          sender: req.user._id,
+          type: 'TASK_STATUS_CHANGED',
+          title: `Task status updated: ${task.title}`,
+          message: `${req.user.name} updated status to "${task.status}".`,
+          link: `/projects/${task.projectId}?task=${task._id}`,
+          metadata: { taskId: task._id, projectId: task.projectId, oldStatus: previousStatus, newStatus: task.status },
+        });
+      }
+    }
+
+    // Record activity
+    let activityAction = 'TASK_UPDATED';
+    let activityDesc = `${req.user.name} updated task "${task.title}".`;
+
+    if (previousStatus !== task.status) {
+      if (task.status === 'Completed') {
+        activityAction = 'TASK_COMPLETED';
+        activityDesc = `${req.user.name} completed task "${task.title}".`;
+      } else {
+        activityAction = 'TASK_STATUS_CHANGED';
+        activityDesc = `${req.user.name} changed task "${task.title}" status from "${previousStatus}" to "${task.status}".`;
+      }
+    } else if (newlyAddedAssigneeIds.length > 0) {
+      activityAction = 'TASK_ASSIGNED';
+      activityDesc = `${req.user.name} assigned task "${task.title}" to ${newlyAddedAssigneeIds.length} team member(s).`;
+    }
+
+    await logActivity({
+      orgId: task.orgId,
+      projectId: task.projectId,
+      taskId: task._id,
+      user: req.user,
+      action: activityAction,
+      description: activityDesc,
+      metadata: {
+        taskTitle: task.title,
+        previousStatus,
+        newStatus: task.status,
+        priority: task.priority,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -799,6 +962,21 @@ const uploadTaskAttachments = async (req, res, next) => {
     const updatedTask = await Task.findById(task._id)
       .populate('attachments.uploadedBy', 'name email');
 
+    // Record activity
+    await logActivity({
+      orgId: task.orgId,
+      projectId: task.projectId,
+      taskId: task._id,
+      user: req.user,
+      action: 'ATTACHMENT_UPLOADED',
+      description: `${req.user.name} attached ${uploadedFiles.length} file(s) to task "${task.title}".`,
+      metadata: {
+        taskTitle: task.title,
+        fileCount: uploadedFiles.length,
+        fileNames: uploadedFiles.map((f) => f.originalname),
+      },
+    });
+
     res.status(201).json({
       success: true,
       message: `Successfully uploaded ${uploadedFiles.length} file(s).`,
@@ -956,8 +1134,23 @@ const deleteTaskAttachment = async (req, res, next) => {
     }
 
     // Remove subdocument from MongoDB
+    const deletedOriginalName = attachment.originalName;
     task.attachments.pull(attachmentId);
     await task.save();
+
+    // Record activity
+    await logActivity({
+      orgId: task.orgId,
+      projectId: task.projectId,
+      taskId: task._id,
+      user: req.user,
+      action: 'ATTACHMENT_DELETED',
+      description: `${req.user.name} removed attachment "${deletedOriginalName}" from task "${task.title}".`,
+      metadata: {
+        taskTitle: task.title,
+        attachmentName: deletedOriginalName,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -969,11 +1162,276 @@ const deleteTaskAttachment = async (req, res, next) => {
   }
 };
 
+/**
+ * DELETE /api/tasks/:taskId
+ * -------------------------
+ * Deletes a task and performs safe cleanup:
+ * 1. Checks that caller belongs to the task's organization.
+ * 2. Checks permission: Only organization owner, admin, or manager can delete tasks.
+ * 3. Safely removes all associated physical attachment files from disk.
+ * 4. Deletes the task from MongoDB.
+ */
+const deleteTask = async (req, res, next) => {
+  try {
+    const { taskId } = req.params;
+
+    if (!taskId || !mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid task ID format.' },
+      });
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Task not found.' },
+      });
+    }
+
+    // Verify caller belongs to the organisation that owns this task
+    const membership = await Membership.findOne({
+      orgId: task.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this task.' },
+      });
+    }
+
+    // Role check: Only owner, admin, or manager can delete tasks
+    const allowedRoles = ['owner', 'admin', 'manager'];
+    if (!allowedRoles.includes(membership.role)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Forbidden. Only organization owners, admins, or managers can delete tasks.' },
+      });
+    }
+
+    // Safely remove any attachments on disk
+    let deletedFilesCount = 0;
+    if (Array.isArray(task.attachments) && task.attachments.length > 0) {
+      for (const att of task.attachments) {
+        if (att.storedName) {
+          const safeFilename = path.basename(att.storedName);
+          const filePath = path.join(uploadDir, safeFilename);
+          if (fs.existsSync(filePath)) {
+            try {
+              fs.unlinkSync(filePath);
+              deletedFilesCount++;
+            } catch (fsErr) {
+              console.warn('[Task Delete Warning] Could not delete attachment file:', fsErr.message);
+            }
+          }
+        }
+      }
+    }
+
+    // Delete task from MongoDB
+    await Task.deleteOne({ _id: task._id });
+
+    // Record activity
+    await logActivity({
+      orgId: task.orgId,
+      projectId: task.projectId,
+      taskId: task._id,
+      user: req.user,
+      action: 'TASK_DELETED',
+      description: `${req.user.name} deleted task "${task.title}".`,
+      metadata: {
+        taskTitle: task.title,
+        projectId: task.projectId,
+        deletedFilesCount,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Task "${task.title}" was deleted successfully.`,
+      deletedTaskId: task._id,
+      projectId: task.projectId,
+      deletedFilesCount,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/tasks
+ * --------------
+ * Retrieves tasks across the organisation (used by Calendar View and multi-project overviews).
+ * Supports filters:
+ * - orgId (from header x-org-id or query)
+ * - projectId
+ * - hasDueDate=true
+ * - startDate / dueAfter ($gte)
+ * - endDate / dueBefore ($lte)
+ * - status, priority, assignedTo
+ * Protected by requireAuth and verified via Membership check.
+ */
+const getTasks = async (req, res, next) => {
+  try {
+    const rawOrgId = req.query.orgId || req.headers['x-org-id'];
+
+    if (!rawOrgId || !mongoose.Types.ObjectId.isValid(rawOrgId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Valid organisation ID is required via query param ?orgId= or x-org-id header.' },
+      });
+    }
+
+    const orgObjectId = new mongoose.Types.ObjectId(rawOrgId);
+
+    // Verify user belongs to the organisation
+    const membership = await Membership.findOne({
+      orgId: orgObjectId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to this organisation.' },
+      });
+    }
+
+    const filter = { orgId: orgObjectId };
+
+    // Project filter
+    if (req.query.projectId) {
+      if (!mongoose.Types.ObjectId.isValid(req.query.projectId)) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Invalid project ID format.' },
+        });
+      }
+      const project = await Project.findOne({
+        _id: req.query.projectId,
+        orgId: orgObjectId,
+      });
+      if (!project) {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Project not found in this organisation.' },
+        });
+      }
+      filter.projectId = project._id;
+    }
+
+    // Due date presence requirement (essential for calendar views)
+    if (req.query.hasDueDate === 'true') {
+      filter.dueDate = { $ne: null, $exists: true };
+    }
+
+    // Date range filtering
+    const start = req.query.startDate || req.query.dueAfter;
+    const end = req.query.endDate || req.query.dueBefore;
+
+    if (start || end) {
+      filter.dueDate = filter.dueDate || {};
+      if (start) {
+        filter.dueDate.$gte = new Date(start);
+      }
+      if (end) {
+        filter.dueDate.$lte = new Date(end);
+      }
+    }
+
+    // Status filter
+    if (req.query.status && ['To Do', 'In Progress', 'Completed', 'Pending'].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    // Priority filter
+    if (req.query.priority && ['Low', 'Medium', 'High'].includes(req.query.priority)) {
+      filter.priority = req.query.priority;
+    }
+
+    // AssignedTo filter
+    if (req.query.assignedTo && mongoose.Types.ObjectId.isValid(req.query.assignedTo)) {
+      filter.assignedTo = new mongoose.Types.ObjectId(req.query.assignedTo);
+    }
+
+    const tasks = await Task.find(filter)
+      .populate('projectId', 'name status')
+      .populate('assignedTo', 'name email avatar')
+      .populate('createdBy', 'name email avatar')
+      .sort({ dueDate: 1, createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      tasks,
+      count: tasks.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/tasks/:taskId
+ * ----------------------
+ * Retrieves a single task with populated references.
+ * Protected by requireAuth and organization membership check.
+ */
+const getTaskById = async (req, res, next) => {
+  try {
+    const { taskId } = req.params;
+
+    if (!taskId || !mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid task ID format.' },
+      });
+    }
+
+    const task = await Task.findById(taskId)
+      .populate('projectId', 'name status deadline')
+      .populate('assignedTo', 'name email avatar')
+      .populate('createdBy', 'name email avatar');
+
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Task not found.' },
+      });
+    }
+
+    // Check membership in the organisation
+    const membership = await Membership.findOne({
+      orgId: task.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this task.' },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      task,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProjectTasks,
   getMyTasks,
+  getTasks,
+  getTaskById,
   createTask,
   updateTask,
+  deleteTask,
   getProjectProgress,
   uploadTaskAttachments,
   downloadTaskAttachment,

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const plansConfig = require('../config/plans');
 const { Project, Membership, Organisation } = require('../models');
 const { parsePagination, formatPaginatedResponse, escapeRegex } = require('../utils/pagination');
+const { createNotification } = require('../services/notificationService');
 
 /**
  * GET /api/projects
@@ -426,6 +427,22 @@ const updateProject = async (req, res, next) => {
       .populate('teamMembers', 'name email role')
       .populate('createdBy', 'name email');
 
+    // Send in-app notification to project team members
+    if (project.teamMembers && project.teamMembers.length > 0) {
+      for (const memberId of project.teamMembers) {
+        createNotification({
+          recipient: memberId,
+          orgId: project.orgId,
+          sender: req.user._id,
+          type: 'PROJECT_UPDATED',
+          title: `Project updated: ${project.name}`,
+          message: `${req.user.name} updated project "${project.name}" (Status: ${project.status}).`,
+          link: `/projects/${project._id}`,
+          metadata: { projectId: project._id },
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: 'Project updated successfully.',
@@ -651,6 +668,96 @@ const removeProjectMember = async (req, res, next) => {
   }
 };
 
+/**
+ * DELETE /api/projects/:projectId
+ * -------------------------------
+ * Deletes a project and cascades cleanup for all its tasks and attachments.
+ * Rules:
+ * - Only owner, admin, or manager of the project's organisation can delete.
+ */
+const deleteProject = async (req, res, next) => {
+  try {
+    const { projectId } = req.params;
+
+    if (!projectId || !mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid project ID format.' },
+      });
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Project not found.' },
+      });
+    }
+
+    // Check membership in the organisation
+    const membership = await Membership.findOne({
+      orgId: project.orgId,
+      userId: req.user._id,
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Access denied. You do not belong to the organisation that owns this project.' },
+      });
+    }
+
+    // Role check: Only owner, admin, or manager can delete projects
+    if (!['owner', 'admin', 'manager'].includes(membership.role)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Forbidden. Only managers, admins, or owners can delete projects.' },
+      });
+    }
+
+    // Find and delete all project tasks & attachments
+    const tasks = await Task.find({ projectId: project._id });
+    for (const t of tasks) {
+      if (Array.isArray(t.attachments)) {
+        for (const att of t.attachments) {
+          if (att.storedName) {
+            const filePath = path.join(uploadDir, att.storedName);
+            try {
+              if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+              }
+            } catch (err) {
+              console.warn('[Project Delete] Could not delete attachment file:', err.message);
+            }
+          }
+        }
+      }
+    }
+
+    await Task.deleteMany({ projectId: project._id });
+    await Project.findByIdAndDelete(project._id);
+
+    // Record activity
+    await logActivity({
+      orgId: project.orgId,
+      projectId: project._id,
+      user: req.user,
+      action: 'PROJECT_DELETED',
+      description: `${req.user.name} deleted project "${project.name}" and all its tasks.`,
+      metadata: {
+        projectName: project.name,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Project "${project.name}" and all associated tasks deleted successfully.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProjects,
   createProject,
@@ -658,4 +765,5 @@ module.exports = {
   updateProject,
   addProjectMembers,
   removeProjectMember,
+  deleteProject,
 };

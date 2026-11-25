@@ -6,6 +6,7 @@ const {
   updateProject,
   addProjectMembers,
   removeProjectMember,
+  deleteProject,
 } = require('../controllers/projectController');
 const {
   getProjectTasks,
@@ -30,6 +31,7 @@ router.get('/', getProjects);
 router.post('/', createProjectValidation, createProject);
 router.get('/:projectId', validateMongoIdParam('projectId'), getProjectById);
 router.patch('/:projectId', validateMongoIdParam('projectId'), updateProjectValidation, updateProject);
+router.delete('/:projectId', validateMongoIdParam('projectId'), deleteProject);
 
 // Project team member management endpoints
 router.post('/:projectId/members', validateMongoIdParam('projectId'), addProjectMembers);

@@ -6,6 +6,9 @@ const Task = require('./Task');
 const Subscription = require('./Subscription');
 const UsageRecord = require('./UsageRecord');
 const Invitation = require('./Invitation');
+const Comment = require('./Comment');
+const ActivityLog = require('./ActivityLog');
+const Notification = require('./Notification');
 
 module.exports = {
   User,
@@ -16,4 +19,7 @@ module.exports = {
   Subscription,
   UsageRecord,
   Invitation,
+  Comment,
+  ActivityLog,
+  Notification,
 };

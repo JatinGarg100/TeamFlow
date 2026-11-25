@@ -11,14 +11,21 @@ const taskRoutes = require('./routes/taskRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const planRoutes = require('./routes/planRoutes');
 const invitationRoutes = require('./routes/invitationRoutes');
+const activityRoutes = require('./routes/activityRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const notFoundHandler = require('./middleware/notFoundHandler');
 const errorHandler = require('./middleware/errorHandler');
+const securityHeaders = require('./middleware/securityHeaders');
+const { authRateLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 
 /**
  * 1. Global Middleware
  */
+// Set standard HTTP security headers (Helmet equivalent)
+app.use(securityHeaders);
+
 // Enable Cross-Origin Resource Sharing with credentials for the React frontend
 const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
 app.use(
@@ -62,13 +69,15 @@ app.get('/', (req, res) => {
 // Health check endpoint
 app.use('/healthz', healthRoutes);
 
-// Core API routes
-app.use('/api/auth', authRoutes);
+// Core API routes (with rate limiting on sensitive authentication & invitation flows)
+app.use('/api/auth', authRateLimiter, authRoutes);
 app.use('/api/orgs', orgRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/invitations', invitationRoutes);
+app.use('/api/invitations', authRateLimiter, invitationRoutes);
+app.use('/api/activity', activityRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api', planRoutes);
 
 /**

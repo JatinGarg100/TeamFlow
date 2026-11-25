@@ -1,5 +1,6 @@
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 // Load environment variables from .env
 dotenv.config();
@@ -40,17 +41,21 @@ const seedDatabase = async () => {
 
     console.log('[Seed] Inserting initial data...');
 
+    // Hash demo password so accounts can log in with Password123!
+    const saltRounds = 10;
+    const defaultPasswordHash = await bcrypt.hash('Password123!', saltRounds);
+
     // 1. Create Admin User
     const adminUser = await User.create({
       name: 'Admin User',
       email: 'admin@teamflow.io',
-      passwordHash: '$2b$10$demoHashedPasswordPlaceholder', // placeholder hash
+      passwordHash: defaultPasswordHash,
     });
 
     const devUser = await User.create({
       name: 'Aarav Sharma',
       email: 'aarav@teamflow.io',
-      passwordHash: '$2b$10$demoHashedPasswordPlaceholder',
+      passwordHash: defaultPasswordHash,
     });
 
     // 2. Create Organisation
@@ -74,7 +79,6 @@ const seedDatabase = async () => {
       description: 'Full-stack online storefront with payment integration.',
       deadline: new Date('2026-12-15'),
       status: 'In Progress',
-      createdBy: adminUser._id,
       teamMembers: [adminUser._id, devUser._id],
       createdBy: adminUser._id,
     });

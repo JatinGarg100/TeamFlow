@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 const { Invitation, Organisation, Membership, User } = require('../models');
 const plansConfig = require('../config/plans');
 const { sendInvitationEmail } = require('../services/mailer');
+const { logActivity } = require('../services/activityLog.service');
+const { createNotification } = require('../services/notificationService');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -129,25 +131,41 @@ const createInvitation = async (req, res, next) => {
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
     const inviteUrl = `${clientUrl}/invite/${rawToken}`;
 
-    // 3. Send email notification (non-blocking)
-    (async () => {
-      try {
-        const inviter = await User.findById(req.user._id);
-        await sendInvitationEmail({
-          recipientEmail: cleanEmail,
-          organisationName: org.name,
-          inviterName: inviter?.name || 'Administrator',
-          role,
-          inviteToken: rawToken,
-        });
-      } catch (err) {
-        console.warn('[Invite] Email notification failed:', err.message);
-      }
-    })();
+    // 3. Send email notification via configured provider (Resend -> SMTP -> Dev Simulation)
+    let emailResult = null;
+    try {
+      const inviter = await User.findById(req.user._id);
+      emailResult = await sendInvitationEmail({
+        recipientEmail: cleanEmail,
+        organisationName: org.name,
+        inviterName: inviter?.name || 'Administrator',
+        role,
+        inviteToken: rawToken,
+      });
+    } catch (err) {
+      console.warn('[Invite] Email notification dispatch error:', err.message);
+      emailResult = {
+        sent: false,
+        reason: err.message,
+        deliveryStatus: 'failed',
+        provider: 'resend',
+      };
+    }
+
+    let statusMessage = `Invitation email sent successfully to ${cleanEmail}.`;
+    if (emailResult?.sent) {
+      statusMessage = `Invitation email sent successfully to ${cleanEmail} via ${emailResult.provider === 'resend' ? 'Resend' : 'email provider'}.`;
+    } else if (emailResult?.deliveryStatus === 'failed') {
+      statusMessage = `Invitation created, but email delivery failed (${emailResult.reason || 'provider error'}). You can copy and share the link manually.`;
+    } else if (emailResult?.deliveryStatus === 'simulated_dev_log') {
+      statusMessage = `Invitation created. Email was not delivered (Resend is not configured in this environment; simulation logged in console). You can copy the link manually.`;
+    }
 
     res.status(201).json({
       success: true,
-      message: `Invitation generated successfully for ${cleanEmail}.`,
+      message: statusMessage,
+      emailSent: Boolean(emailResult?.sent),
+      emailDelivery: emailResult,
       invitation: {
         id: invitation._id,
         email: invitation.email,
@@ -168,7 +186,8 @@ const createInvitation = async (req, res, next) => {
 /**
  * GET /api/orgs/:orgId/invitations
  * --------------------------------
- * Lists all pending invitations for the organisation.
+ * Lists invitations for the organisation.
+ * Supports status query (?status=pending|accepted|expired|all).
  */
 const getOrgInvitations = async (req, res, next) => {
   try {
@@ -186,11 +205,26 @@ const getOrgInvitations = async (req, res, next) => {
       });
     }
 
-    const invitations = await Invitation.find({
-      orgId,
-      status: 'pending',
-      expiresAt: { $gt: new Date() },
-    })
+    const filter = { orgId };
+    const statusQuery = req.query.status;
+
+    if (statusQuery && ['pending', 'accepted', 'expired'].includes(statusQuery)) {
+      filter.status = statusQuery;
+    }
+
+    // Automatically update any pending invitations that have passed their expiresAt date
+    await Invitation.updateMany(
+      {
+        orgId,
+        status: 'pending',
+        expiresAt: { $lt: new Date() },
+      },
+      {
+        $set: { status: 'expired' },
+      }
+    );
+
+    const invitations = await Invitation.find(filter)
       .populate('invitedBy', 'name email')
       .sort({ createdAt: -1 });
 
@@ -224,7 +258,9 @@ const verifyInvitation = async (req, res, next) => {
     const invitation = await Invitation.findOne({
       tokenHash,
       status: 'pending',
-    }).populate('orgId', 'name slug plan');
+    })
+      .populate('orgId', 'name slug plan')
+      .populate('invitedBy', 'name email');
 
     if (!invitation) {
       return res.status(404).json({
@@ -254,6 +290,30 @@ const verifyInvitation = async (req, res, next) => {
       organisation: {
         id: invitation.orgId._id,
         name: invitation.orgId.name,
+      },
+      invitedBy: invitation.invitedBy
+        ? {
+            id: invitation.invitedBy._id,
+            name: invitation.invitedBy.name,
+            email: invitation.invitedBy.email,
+          }
+        : null,
+      invitation: {
+        id: invitation._id,
+        email: invitation.email,
+        role: invitation.role,
+        organisation: {
+          id: invitation.orgId._id,
+          name: invitation.orgId.name,
+        },
+        invitedBy: invitation.invitedBy
+          ? {
+              id: invitation.invitedBy._id,
+              name: invitation.invitedBy.name,
+              email: invitation.invitedBy.email,
+            }
+          : null,
+        expiresAt: invitation.expiresAt,
       },
       hasExistingAccount: Boolean(existingUser),
     });
@@ -309,6 +369,34 @@ const acceptInvitation = async (req, res, next) => {
     const cleanEmail = invitation.email.toLowerCase().trim();
     let user = await User.findOne({ email: cleanEmail });
 
+    // Check if caller is already authenticated as the invited user
+    let authenticatedUser = null;
+    const authHeader = req.headers.authorization;
+    const tokenCookie = req.cookies?.token;
+    const bearer = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : tokenCookie;
+    if (bearer) {
+      try {
+        const decoded = jwt.verify(bearer, JWT_SECRET);
+        authenticatedUser = await User.findById(decoded.userId);
+      } catch {
+        // invalid token, proceed with normal credentials check
+      }
+    }
+
+    // Case D: Logged in under a different email account -> reject mismatch with 403
+    if (authenticatedUser && authenticatedUser.email.toLowerCase() !== cleanEmail) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: `You are signed in as ${authenticatedUser.email}, but this invitation was sent to ${invitation.email}. Please sign out and sign in with the invited email address.`,
+          code: 'EMAIL_MISMATCH',
+        },
+      });
+    }
+
+    const isAlreadyAuthenticatedAsInvitee =
+      Boolean(authenticatedUser && authenticatedUser.email.toLowerCase() === cleanEmail);
+
     // If new user: create account with supplied name & password
     if (!user) {
       if (!name || typeof name !== 'string' || name.trim().length < 2) {
@@ -331,6 +419,8 @@ const acceptInvitation = async (req, res, next) => {
         email: cleanEmail,
         passwordHash,
       });
+    } else if (isAlreadyAuthenticatedAsInvitee) {
+      // User is already logged in as this invitee -> One-click acceptance granted
     } else if (password) {
       // If user exists and provided password, verify credentials
       const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -340,25 +430,98 @@ const acceptInvitation = async (req, res, next) => {
           error: { message: 'Incorrect password for this existing account.' },
         });
       }
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Password is required to confirm acceptance for your existing account.' },
+      });
     }
 
-    // Create membership linking user to organisation
-    let membership = await Membership.findOne({
+    // Check if user is already a member of this organisation
+    const existingMembership = await Membership.findOne({
       orgId: invitation.orgId._id,
       userId: user._id,
     });
 
-    if (!membership) {
-      membership = await Membership.create({
-        orgId: invitation.orgId._id,
-        userId: user._id,
-        role: invitation.role,
+    if (existingMembership) {
+      invitation.status = 'accepted';
+      await invitation.save();
+      return res.status(409).json({
+        success: false,
+        error: { message: 'You are already an active member of this organisation.' },
       });
     }
 
+    // Check plan quota limits before joining
+    const currentMemberCount = await Membership.countDocuments({ orgId: invitation.orgId._id });
+    const planId = invitation.orgId.plan || 'free';
+    const plan = plansConfig.find((p) => p.id === planId) || plansConfig[0];
+
+    if (currentMemberCount >= plan.limits.maxMembers) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: `Workspace member limit reached (${plan.limits.maxMembers} members on ${plan.name} plan). Please ask the organisation owner to upgrade their plan.`,
+          code: 'PLAN_LIMIT_REACHED',
+        },
+      });
+    }
+
+    // Create membership linking user to organisation
+    const membership = await Membership.create({
+      orgId: invitation.orgId._id,
+      userId: user._id,
+      role: invitation.role,
+    });
+
     // Mark invitation accepted
     invitation.status = 'accepted';
+    invitation.acceptedAt = new Date();
     await invitation.save();
+
+    // Log Activity
+    await logActivity({
+      organisation: invitation.orgId._id,
+      user,
+      action: 'MEMBER_JOINED',
+      description: `${user.name} accepted an invitation and joined the organisation as ${membership.role}.`,
+      metadata: {
+        email: user.email,
+        role: membership.role,
+        joinedVia: 'invitation',
+      },
+    });
+
+    // In-app notification to inviter
+    if (invitation.invitedBy) {
+      createNotification({
+        recipient: invitation.invitedBy,
+        orgId: invitation.orgId._id,
+        sender: user._id,
+        type: 'INVITATION_RECEIVED',
+        title: `${user.name} joined the workspace`,
+        message: `${user.name} (${user.email}) accepted the invitation and joined as ${membership.role}.`,
+        link: `/employees`,
+        metadata: { userId: user._id, role: membership.role },
+      });
+    }
+
+    // Fetch user's memberships to return full organisations array
+    const memberships = await Membership.find({ userId: user._id })
+      .populate('orgId', 'name slug plan ownerId')
+      .sort({ createdAt: 1 });
+
+    const organisations = memberships
+      .filter((m) => m.orgId)
+      .map((m) => ({
+        id: m.orgId._id,
+        _id: m.orgId._id,
+        name: m.orgId.name,
+        slug: m.orgId.slug,
+        role: m.role,
+        plan: m.orgId.plan,
+        isOwner: m.role === 'owner',
+      }));
 
     // Issue JWT session token
     const payload = {
@@ -384,15 +547,142 @@ const acceptInvitation = async (req, res, next) => {
       message: `Welcome to ${invitation.orgId.name}! You have successfully joined the workspace.`,
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
+        avatar: user.avatar || '',
       },
       organisation: {
         id: invitation.orgId._id,
+        _id: invitation.orgId._id,
         name: invitation.orgId.name,
+        slug: invitation.orgId.slug,
         role: membership.role,
+        plan: invitation.orgId.plan,
       },
+      organisations,
       token: sessionToken,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/orgs/:orgId/invitations/:invitationId/resend
+ * ----------------------------------------------------
+ * Resends an existing pending invitation with a new cryptographic token and refreshed expiry.
+ */
+const resendInvitation = async (req, res, next) => {
+  try {
+    const { orgId, invitationId } = req.params;
+
+    if (!invitationId || !mongoose.Types.ObjectId.isValid(invitationId)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid invitation ID format.' },
+      });
+    }
+
+    const callerMembership = await Membership.findOne({
+      orgId,
+      userId: req.user._id,
+    });
+
+    if (!callerMembership || !['owner', 'admin', 'manager'].includes(callerMembership.role)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Forbidden. Only managers can resend invitations.' },
+      });
+    }
+
+    const org = await Organisation.findById(orgId);
+    if (!org) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Organisation not found.' },
+      });
+    }
+
+    const invitation = await Invitation.findOne({
+      _id: invitationId,
+      orgId,
+    });
+
+    if (!invitation) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Invitation not found.' },
+      });
+    }
+
+    if (invitation.status === 'accepted') {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Cannot resend an invitation that has already been accepted.' },
+      });
+    }
+
+    // Generate new token & SHA-256 hash
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+    invitation.tokenHash = tokenHash;
+    invitation.expiresAt = expiresAt;
+    invitation.status = 'pending';
+    invitation.invitedBy = req.user._id;
+    await invitation.save();
+
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+    const inviteUrl = `${clientUrl}/invite/${rawToken}`;
+
+    // Send email notification via configured provider (Resend -> SMTP -> Dev Simulation)
+    let emailResult = null;
+    try {
+      const inviter = await User.findById(req.user._id);
+      emailResult = await sendInvitationEmail({
+        recipientEmail: invitation.email,
+        organisationName: org.name,
+        inviterName: inviter?.name || 'Administrator',
+        role: invitation.role,
+        inviteToken: rawToken,
+      });
+    } catch (err) {
+      console.warn('[Invite Resend] Email notification dispatch error:', err.message);
+      emailResult = {
+        sent: false,
+        reason: err.message,
+        deliveryStatus: 'failed',
+        provider: 'resend',
+      };
+    }
+
+    let statusMessage = `Invitation email resent successfully to ${invitation.email}.`;
+    if (emailResult?.sent) {
+      statusMessage = `Invitation email resent successfully to ${invitation.email} via ${emailResult.provider === 'resend' ? 'Resend' : 'email provider'}.`;
+    } else if (emailResult?.deliveryStatus === 'failed') {
+      statusMessage = `Invitation token regenerated, but email delivery failed (${emailResult.reason || 'provider error'}). You can copy and share the link manually.`;
+    } else if (emailResult?.deliveryStatus === 'simulated_dev_log') {
+      statusMessage = `Invitation resent. Email was not delivered (Resend is not configured in this environment; simulation logged in console). You can copy the link manually.`;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: statusMessage,
+      emailSent: Boolean(emailResult?.sent),
+      emailDelivery: emailResult,
+      invitation: {
+        id: invitation._id,
+        email: invitation.email,
+        role: invitation.role,
+        expiresAt: invitation.expiresAt,
+        status: invitation.status,
+        inviteToken: rawToken,
+        inviteUrl,
+      },
+      inviteToken: rawToken,
+      inviteUrl,
     });
   } catch (error) {
     next(error);
@@ -441,5 +731,6 @@ module.exports = {
   getOrgInvitations,
   verifyInvitation,
   acceptInvitation,
+  resendInvitation,
   revokeInvitation,
 };

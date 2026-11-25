@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { Membership, Project, Task, Organisation } = require('../models');
+const { getActivityLogs } = require('../services/activityLog.service');
 
 /**
  * GET /api/dashboard
@@ -8,9 +9,15 @@ const { Membership, Project, Task, Organisation } = require('../models');
  * - Total employees
  * - Total projects
  * - Active projects (In Progress)
- * - Pending tasks (To Do / In Progress)
+ * - Total tasks
  * - Completed tasks
- * - Recent projects with name, status, deadline, and live calculated progress
+ * - In Progress tasks
+ * - To Do tasks
+ * - Pending tasks (To Do / In Progress)
+ * - Overdue tasks (dueDate < now AND status != Completed)
+ * - Overall completion percentage
+ * - Recent projects with live calculated progress
+ * - Recent activities timeline scoped to organisation
  *
  * Strictly scoped to the authenticated user's organisation.
  */
@@ -50,11 +57,16 @@ const getDashboardStats = async (req, res, next) => {
             totalEmployees: 0,
             totalProjects: 0,
             activeProjects: 0,
-            pendingTasks: 0,
-            completedTasks: 0,
             totalTasks: 0,
+            completedTasks: 0,
+            inProgressTasks: 0,
+            todoTasks: 0,
+            pendingTasks: 0,
+            overdueTasks: 0,
+            completionPercentage: 0,
           },
           recentProjects: [],
+          recentActivities: [],
         });
       }
 
@@ -64,8 +76,9 @@ const getDashboardStats = async (req, res, next) => {
     // 1. Fetch Organisation Info
     const organisation = await Organisation.findById(targetOrgId).select('name slug plan');
 
-    // 2. TASK 7: Use MongoDB Aggregation for organisation-wide task breakdown in a single pass
-    const [membershipCount, projectCount, activeProjectsCount, taskAgg] = await Promise.all([
+    // 2. Fetch Aggregated Statistics & Recent Activities in parallel
+    const now = new Date();
+    const [membershipCount, projectCount, activeProjectsCount, taskAgg, recentActivitiesResult] = await Promise.all([
       Membership.countDocuments({ orgId: targetOrgId }),
       Project.countDocuments({ orgId: targetOrgId }),
       Project.countDocuments({ orgId: targetOrgId, status: 'In Progress' }),
@@ -78,28 +91,65 @@ const getDashboardStats = async (req, res, next) => {
             completedTasks: {
               $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] },
             },
+            inProgressTasks: {
+              $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] },
+            },
+            todoTasks: {
+              $sum: {
+                $cond: [
+                  { $or: [{ $eq: ['$status', 'To Do'] }, { $eq: ['$status', 'Pending'] }] },
+                  1,
+                  0,
+                ],
+              },
+            },
             pendingTasks: {
               $sum: { $cond: [{ $ne: ['$status', 'Completed'] }, 1, 0] },
+            },
+            overdueTasks: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$status', 'Completed'] },
+                      { $ne: ['$dueDate', null] },
+                      { $lt: ['$dueDate', now] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
             },
           },
         },
       ]),
+      getActivityLogs({ orgId: targetOrgId, limit: 8 }),
     ]);
 
     const taskMetrics = taskAgg[0] || {
       totalTasks: 0,
       completedTasks: 0,
+      inProgressTasks: 0,
+      todoTasks: 0,
       pendingTasks: 0,
+      overdueTasks: 0,
     };
 
     const totalEmployees = membershipCount;
     const totalProjects = projectCount;
     const activeProjects = activeProjectsCount;
-    const pendingTasks = taskMetrics.pendingTasks;
-    const completedTasks = taskMetrics.completedTasks;
     const totalTasks = taskMetrics.totalTasks;
+    const completedTasks = taskMetrics.completedTasks;
+    const inProgressTasks = taskMetrics.inProgressTasks;
+    const todoTasks = taskMetrics.todoTasks;
+    const pendingTasks = taskMetrics.pendingTasks;
+    const overdueTasks = taskMetrics.overdueTasks;
 
-    // 3. TASK 7: Fetch Recent Projects and aggregate their task completion without separate N+1 queries
+    const completionPercentage =
+      totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+
+    // 3. Fetch Recent Projects and aggregate their task completion
     const recentProjectsDocs = await Project.find({ orgId: targetOrgId })
       .sort({ createdAt: -1 })
       .limit(5);
@@ -168,11 +218,16 @@ const getDashboardStats = async (req, res, next) => {
         totalEmployees,
         totalProjects,
         activeProjects,
-        pendingTasks,
-        completedTasks,
         totalTasks,
+        completedTasks,
+        inProgressTasks,
+        todoTasks,
+        pendingTasks,
+        overdueTasks,
+        completionPercentage,
       },
       recentProjects,
+      recentActivities: recentActivitiesResult.activities || [],
     });
   } catch (error) {
     next(error);

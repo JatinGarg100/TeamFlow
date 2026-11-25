@@ -55,6 +55,10 @@ const invitationSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

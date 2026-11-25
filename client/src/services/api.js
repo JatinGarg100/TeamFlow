@@ -44,6 +44,14 @@ const getHeaders = (extraHeaders = {}) => {
   if (auth?.token) {
     headers['Authorization'] = `Bearer ${auth.token}`;
   }
+  const orgId =
+    extraHeaders['x-org-id'] ||
+    localStorage.getItem('teamflow_active_org_id') ||
+    auth?.organisation?.id ||
+    auth?.organisation?._id;
+  if (orgId) {
+    headers['x-org-id'] = orgId;
+  }
   return headers;
 };
 
@@ -92,6 +100,28 @@ export const loginUser = async ({ email, password }) => {
   return data;
 };
 
+export const googleLoginApi = async ({ idToken, credential, organisationName }) => {
+  const res = await fetch(`${API_BASE_URL}/auth/google`, {
+    method: 'POST',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ idToken, credential, organisationName }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Google authentication failed');
+  }
+
+  setStoredAuth({
+    user: data.user,
+    organisation: data.organisation,
+    token: data.token,
+  });
+
+  return data;
+};
+
 export const getCurrentUser = async () => {
   const res = await fetch(`${API_BASE_URL}/auth/me`, {
     method: 'GET',
@@ -119,6 +149,57 @@ export const logoutUser = async () => {
   } finally {
     clearStoredAuth();
   }
+};
+
+export const uploadAvatarApi = async (file) => {
+  const formData = new FormData();
+  formData.append('avatar', file);
+
+  const auth = getStoredAuth();
+  const headers = {};
+  if (auth?.token) {
+    headers['Authorization'] = `Bearer ${auth.token}`;
+  }
+
+  const res = await fetch(`${API_BASE_URL}/auth/avatar`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to upload profile picture');
+  }
+
+  if (auth?.user) {
+    const updatedUser = { ...auth.user, avatar: data.avatar };
+    setStoredAuth({ ...auth, user: updatedUser });
+  }
+
+  return data;
+};
+
+export const updateUserProfileApi = async (updates) => {
+  const res = await fetch(`${API_BASE_URL}/auth/profile`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify(updates),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to update profile');
+  }
+
+  const auth = getStoredAuth();
+  if (auth?.user) {
+    setStoredAuth({ ...auth, user: { ...auth.user, ...data.user } });
+  }
+
+  return data.user;
 };
 
 /* ── Organisation Members (Employees) ────── */
@@ -154,6 +235,25 @@ export const fetchOrgMembers = async (orgId, params = {}) => {
   };
 };
 
+export const fetchMemberProfileApi = async (orgId, memberId) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/members/${memberId}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch member profile');
+  }
+
+  return {
+    member: data.member,
+    projects: data.projects || [],
+    tasks: data.tasks || [],
+  };
+};
+
 export const addOrgMember = async (orgId, { name, email, password, role }) => {
   const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/members`, {
     method: 'POST',
@@ -181,6 +281,154 @@ export const removeOrgMemberApi = async (orgId, memberId) => {
   if (!res.ok) {
     throw new Error(data.error?.message || 'Failed to remove member from organisation');
   }
+
+  return data;
+};
+
+export const updateMemberRoleApi = async (orgId, memberId, role) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/members/${memberId}`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ role }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to update member role');
+  }
+
+  return data.member;
+};
+
+/* ── Organisation Details & Profile ───────── */
+export const fetchOrganisationApi = async (orgId) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch organisation details');
+  }
+
+  return data.organisation;
+};
+
+export const updateOrganisationApi = async (orgId, { name }) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ name }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to update organisation details');
+  }
+
+  return data.organisation;
+};
+
+/* ── Organisation Invitations ─────────────── */
+export const fetchOrgInvitationsApi = async (orgId, status) => {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations${qs}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch pending invitations');
+  }
+
+  return data.invitations || [];
+};
+
+export const createInvitationApi = async (orgId, { email, role }) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations`, {
+    method: 'POST',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ email, role }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to send invitation');
+  }
+
+  return data;
+};
+
+export const resendInvitationApi = async (orgId, invitationId) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations/${invitationId}/resend`, {
+    method: 'POST',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to resend invitation');
+  }
+
+  return data;
+};
+
+export const revokeInvitationApi = async (orgId, invitationId) => {
+  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations/${invitationId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to cancel invitation');
+  }
+
+  return data;
+};
+
+export const verifyInvitationTokenApi = async (token) => {
+  const res = await fetch(`${API_BASE_URL}/invitations/${token}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to verify invitation token');
+  }
+
+  return data;
+};
+
+export const acceptInvitationApi = async (token, { name, password } = {}) => {
+  const res = await fetch(`${API_BASE_URL}/invitations/${token}/accept`, {
+    method: 'POST',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ name, password }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to accept invitation');
+  }
+
+  setStoredAuth({
+    user: data.user,
+    organisation: data.organisation,
+    token: data.token,
+  });
 
   return data;
 };
@@ -220,19 +468,35 @@ export const fetchProjectsApi = async (orgId, params = {}) => {
 };
 
 export const createProjectApi = async ({ name, description, deadline, status, teamMembers, orgId }) => {
+  const auth = getStoredAuth();
+  const targetOrgId = orgId || auth?.organisation?.id || auth?.organisation?._id;
+
+  const payload = {
+    name,
+    description: description || '',
+    status: status || 'Planning',
+    teamMembers: Array.isArray(teamMembers) ? teamMembers : [],
+    orgId: targetOrgId,
+  };
+
+  if (deadline) {
+    payload.deadline = deadline;
+  }
+
   const res = await fetch(`${API_BASE_URL}/projects`, {
     method: 'POST',
-    headers: getHeaders(),
+    headers: getHeaders(targetOrgId ? { 'x-org-id': targetOrgId } : {}),
     credentials: 'include',
-    body: JSON.stringify({ name, description, deadline, status, teamMembers, orgId }),
+    body: JSON.stringify(payload),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error?.message || 'Failed to create project');
+    const errorMsg = data.error?.message || data.message || 'Failed to create project';
+    throw new Error(errorMsg);
   }
 
-  return data.project;
+  return data.project || data;
 };
 
 export const fetchProjectByIdApi = async (projectId) => {
@@ -264,6 +528,21 @@ export const updateProjectApi = async (projectId, updates) => {
   }
 
   return data.project;
+};
+
+export const deleteProjectApi = async (projectId) => {
+  const res = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to delete project');
+  }
+
+  return data;
 };
 
 export const addProjectMembersApi = async (projectId, userIds) => {
@@ -302,12 +581,20 @@ export const fetchProjectTasksApi = async (projectId, params = {}) => {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set('page', params.page);
   if (params.limit) searchParams.set('limit', params.limit);
-  if (params.status) searchParams.set('status', params.status);
-  if (params.priority) searchParams.set('priority', params.priority);
-  if (params.search) searchParams.set('search', params.search);
-  if (params.assignedTo) searchParams.set('assignedTo', params.assignedTo);
+  if (params.status && params.status !== 'ALL') searchParams.set('status', params.status);
+  if (params.priority && params.priority !== 'ALL') searchParams.set('priority', params.priority);
+  if (params.search && params.search.trim()) searchParams.set('search', params.search.trim());
+  if (params.assignedTo && params.assignedTo !== 'ALL' && params.assignedTo !== 'all') {
+    searchParams.set('assignedTo', params.assignedTo);
+  }
   if (params.sortBy) searchParams.set('sortBy', params.sortBy);
   if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+  if (params.dueDateFilter && params.dueDateFilter !== 'ALL') {
+    searchParams.set('dueDateFilter', params.dueDateFilter);
+  }
+  if (params.overdue) searchParams.set('overdue', params.overdue);
+  if (params.dueBefore) searchParams.set('dueBefore', params.dueBefore);
+  if (params.dueAfter) searchParams.set('dueAfter', params.dueAfter);
 
   const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
   const res = await fetch(`${API_BASE_URL}/projects/${projectId}/tasks${qs}`, {
@@ -380,6 +667,47 @@ export const updateTaskApi = async (taskId, updates) => {
   return data.task;
 };
 
+export const fetchOrgTasksApi = async (params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.orgId) searchParams.set('orgId', params.orgId);
+  if (params.projectId && params.projectId !== 'ALL') searchParams.set('projectId', params.projectId);
+  if (params.hasDueDate !== undefined) searchParams.set('hasDueDate', params.hasDueDate);
+  if (params.startDate) searchParams.set('startDate', params.startDate);
+  if (params.endDate) searchParams.set('endDate', params.endDate);
+  if (params.status && params.status !== 'ALL') searchParams.set('status', params.status);
+  if (params.priority && params.priority !== 'ALL') searchParams.set('priority', params.priority);
+  if (params.assignedTo && params.assignedTo !== 'ALL') searchParams.set('assignedTo', params.assignedTo);
+
+  const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/tasks${qs}`, {
+    method: 'GET',
+    headers: getHeaders(params.orgId ? { 'x-org-id': params.orgId } : {}),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch tasks');
+  }
+
+  return data.tasks || [];
+};
+
+export const fetchTaskByIdApi = async (taskId) => {
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch task details');
+  }
+
+  return data.task;
+};
+
 /* ── Task Attachments Endpoints (Phase 4) ──────── */
 export const uploadTaskAttachmentsApi = async (taskId, formData) => {
   const auth = getStoredAuth();
@@ -423,20 +751,43 @@ export const deleteTaskAttachmentApi = async (taskId, attachmentId) => {
   return data;
 };
 
+export const deleteTaskApi = async (taskId) => {
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to delete task');
+  }
+
+  return data;
+};
+
 export const fetchMyTasksApi = async (params = {}) => {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set('page', params.page);
   if (params.limit) searchParams.set('limit', params.limit);
-  if (params.status) searchParams.set('status', params.status);
-  if (params.priority) searchParams.set('priority', params.priority);
-  if (params.search) searchParams.set('search', params.search);
+  if (params.status && params.status !== 'ALL') searchParams.set('status', params.status);
+  if (params.priority && params.priority !== 'ALL') searchParams.set('priority', params.priority);
+  if (params.search && params.search.trim()) searchParams.set('search', params.search.trim());
+  if (params.assignedTo && params.assignedTo !== 'me') searchParams.set('assignedTo', params.assignedTo);
   if (params.sortBy) searchParams.set('sortBy', params.sortBy);
   if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+  if (params.dueDateFilter && params.dueDateFilter !== 'ALL') {
+    searchParams.set('dueDateFilter', params.dueDateFilter);
+  }
+  if (params.overdue) searchParams.set('overdue', params.overdue);
+  if (params.dueBefore) searchParams.set('dueBefore', params.dueBefore);
+  if (params.dueAfter) searchParams.set('dueAfter', params.dueAfter);
+  if (params.orgId) searchParams.set('orgId', params.orgId);
 
   const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
   const res = await fetch(`${API_BASE_URL}/tasks/my${qs}`, {
     method: 'GET',
-    headers: getHeaders(),
+    headers: getHeaders(params.orgId ? { 'x-org-id': params.orgId } : {}),
     credentials: 'include',
   });
 
@@ -456,89 +807,7 @@ export const fetchMyTasksApi = async (params = {}) => {
   };
 };
 
-/* ── Workspace Invitations Endpoints ─────── */
-export const createInvitationApi = async (orgId, { email, role }) => {
-  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations`, {
-    method: 'POST',
-    headers: getHeaders(),
-    credentials: 'include',
-    body: JSON.stringify({ email, role }),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error?.message || 'Failed to send invitation');
-  }
-
-  return data;
-};
-
-export const fetchOrgInvitationsApi = async (orgId) => {
-  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations`, {
-    method: 'GET',
-    headers: getHeaders(),
-    credentials: 'include',
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error?.message || 'Failed to fetch invitations');
-  }
-
-  return data.invitations || [];
-};
-
-export const revokeInvitationApi = async (orgId, invitationId) => {
-  const res = await fetch(`${API_BASE_URL}/orgs/${orgId}/invitations/${invitationId}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-    credentials: 'include',
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error?.message || 'Failed to cancel invitation');
-  }
-
-  return data;
-};
-
-export const verifyInvitationApi = async (token) => {
-  const res = await fetch(`${API_BASE_URL}/invitations/${token}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error?.message || 'Invalid or expired invitation link');
-  }
-
-  return data;
-};
-
-export const acceptInvitationApi = async (token, { name, password }) => {
-  const res = await fetch(`${API_BASE_URL}/invitations/${token}/accept`, {
-    method: 'POST',
-    headers: getHeaders(),
-    credentials: 'include',
-    body: JSON.stringify({ name, password }),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error?.message || 'Failed to accept invitation');
-  }
-
-  setStoredAuth({
-    user: data.user,
-    organisation: data.organisation,
-    token: data.token,
-  });
-
-  return data;
-};
-
+/* ── Project Progress ────────────────────── */
 export const fetchProjectProgressApi = async (projectId) => {
   const res = await fetch(`${API_BASE_URL}/projects/${projectId}/progress`, {
     method: 'GET',
@@ -596,6 +865,145 @@ export const fetchUsageApi = async () => {
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.error?.message || 'Failed to fetch usage statistics');
+  }
+
+  return data;
+};
+
+/* ── Task Comments Endpoints (Phase 3) ──────────── */
+export const fetchTaskCommentsApi = async (taskId, params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.page) searchParams.set('page', params.page);
+  if (params.limit) searchParams.set('limit', params.limit);
+
+  const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/comments${qs}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch task comments');
+  }
+
+  return {
+    comments: data.comments || data.data || [],
+    pagination: data.pagination || {
+      currentPage: data.currentPage || 1,
+      totalPages: data.totalPages || 1,
+      totalItems: data.totalItems || (data.comments ? data.comments.length : 0),
+      limit: data.limit || 50,
+    },
+  };
+};
+
+export const createTaskCommentApi = async (taskId, text) => {
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/comments`, {
+    method: 'POST',
+    headers: getHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ text }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to post comment');
+  }
+
+  return data.comment;
+};
+
+/* ── Activity History Endpoints (Phase 3) ──────── */
+export const fetchActivityLogsApi = async (params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.orgId) searchParams.set('orgId', params.orgId);
+  if (params.projectId) searchParams.set('projectId', params.projectId);
+  if (params.taskId) searchParams.set('taskId', params.taskId);
+  if (params.page) searchParams.set('page', params.page);
+  if (params.limit) searchParams.set('limit', params.limit);
+
+  const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/activity${qs}`, {
+    method: 'GET',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch activity logs');
+  }
+
+  return {
+    activities: data.activities || data.data || [],
+    pagination: data.pagination || {
+      currentPage: data.currentPage || 1,
+      totalPages: data.totalPages || 1,
+      totalItems: data.totalItems || (data.activities ? data.activities.length : 0),
+      limit: data.limit || 20,
+    },
+  };
+};
+
+/* ── Notifications Endpoints ──────────────── */
+export const fetchNotificationsApi = async (params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.orgId) searchParams.set('orgId', params.orgId);
+  if (params.read !== undefined) searchParams.set('read', params.read);
+  if (params.page) searchParams.set('page', params.page);
+  if (params.limit) searchParams.set('limit', params.limit);
+
+  const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/notifications${qs}`, {
+    method: 'GET',
+    headers: getHeaders(params.orgId ? { 'x-org-id': params.orgId } : {}),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to fetch notifications');
+  }
+
+  return {
+    notifications: data.notifications || data.data || [],
+    unreadCount: data.unreadCount || 0,
+    pagination: data.pagination || {
+      currentPage: 1,
+      totalPages: 1,
+      totalItems: data.notifications ? data.notifications.length : 0,
+    },
+  };
+};
+
+export const markNotificationReadApi = async (notificationId) => {
+  const res = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to mark notification as read');
+  }
+
+  return data;
+};
+
+export const markAllNotificationsReadApi = async (orgId) => {
+  const res = await fetch(`${API_BASE_URL}/notifications/read-all`, {
+    method: 'PATCH',
+    headers: getHeaders(orgId ? { 'x-org-id': orgId } : {}),
+    credentials: 'include',
+    body: JSON.stringify({ orgId }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to mark all notifications as read');
   }
 
   return data;

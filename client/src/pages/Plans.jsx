@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { fetchPlansApi, fetchUsageApi } from '../services/api';
 
 /**
- * Plans page
- * ──────────
+ * Plans Page — Premium SaaS Mixed Theme
+ * ──────────────────────────────────────
  * Displays dynamic subscription tiers and live database resource usage.
  * Explicitly states student project boundaries without pretending fake transactions occurred.
  */
@@ -13,7 +13,6 @@ function Plans() {
   const [usageData, setUsageData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modalMessage, setModalMessage] = useState(null);
-
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -72,21 +71,21 @@ function Plans() {
   };
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto">
+    <div className="space-y-8 max-w-5xl mx-auto pb-12">
       {/* Page Header */}
       <div className="text-center max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold tracking-tight text-[#1E202A] sm:text-3xl">
-          Subscription Plans & Resource Usage
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-3xl">
+          Subscription Plans &amp; Resource Usage
         </h1>
-        <p className="mt-2 text-sm text-[#64748B]">
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
           Transparent feature quotas and live MongoDB resource tallies for your organisation.
         </p>
       </div>
 
       {/* Error alert */}
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 flex items-center gap-2">
-          <svg className="h-4 w-4 shrink-0 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 p-4 text-xs text-red-700 dark:text-red-300 flex items-center gap-2 shadow-xs">
+          <svg className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <span>{error}</span>
@@ -94,99 +93,109 @@ function Plans() {
       )}
 
       {/* ── Pricing Cards Grid ── */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 items-stretch">
-        {plans.map((plan) => {
-          const isCurrent = currentPlan.toLowerCase() === plan.id.toLowerCase();
-          const isPro = plan.recommended || plan.id === 'pro';
+      {loading ? (
+        <div className="flex items-center justify-center p-12 text-sm text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] shadow-xs">
+          <svg className="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400 mr-2.5" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span>Loading subscription plans and usage...</span>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 items-stretch">
+          {plans.map((plan) => {
+            const isCurrent = currentPlan.toLowerCase() === plan.id.toLowerCase();
+            const isPro = plan.recommended || plan.id === 'pro';
 
-          return (
-            <div
-              key={plan.id}
-              className={`relative flex flex-col justify-between rounded-2xl bg-white p-7 transition-all duration-150 ${
-                isCurrent
-                  ? 'border-2 border-[#5B4BDB] shadow-md ring-1 ring-[#5B4BDB]/20'
-                  : 'border border-[#E2E8F0] shadow-xs hover:border-[#CBD5E1]'
-              }`}
-            >
-              {/* Current plan / Recommended badge */}
-              {isCurrent ? (
-                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-[#5B4BDB] px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white shadow-xs">
-                  Current Plan
-                </span>
-              ) : isPro ? (
-                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-slate-800 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white shadow-xs">
-                  Recommended
-                </span>
-              ) : null}
+            return (
+              <div
+                key={plan.id}
+                className={`relative flex flex-col justify-between rounded-2xl bg-white dark:bg-[#111827] p-7 transition-all duration-150 ${
+                  isCurrent
+                    ? 'border-2 border-blue-600 dark:border-blue-500 shadow-md ring-4 ring-blue-50 dark:ring-blue-950/40'
+                    : 'border border-slate-200 dark:border-slate-800 shadow-xs hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                {/* Current plan / Recommended badge */}
+                {isCurrent ? (
+                  <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 dark:bg-blue-500 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white shadow-xs">
+                    Current Plan
+                  </span>
+                ) : isPro ? (
+                  <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-slate-900 dark:bg-slate-700 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white shadow-xs">
+                    Recommended
+                  </span>
+                ) : null}
 
-              <div>
-                {/* Header */}
-                <div className="text-center pb-6 border-b border-[#F1F5F9]">
-                  <h2 className="text-lg font-bold text-[#1E202A]">{plan.name}</h2>
-                  <div className="mt-3 flex items-baseline justify-center gap-1">
-                    <span className="text-4xl font-extrabold tracking-tight text-[#1E202A]">
-                      {plan.priceLabel || (plan.price === 0 ? 'Free' : `$${plan.price}`)}
-                    </span>
-                    {plan.period && plan.price > 0 && (
-                      <span className="text-xs text-[#64748B]">/{plan.period}</span>
-                    )}
+                <div>
+                  {/* Header */}
+                  <div className="text-center pb-6 border-b border-slate-100 dark:border-slate-800">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">{plan.name}</h2>
+                    <div className="mt-3 flex items-baseline justify-center gap-1">
+                      <span className="text-4xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
+                        {plan.priceLabel || (plan.price === 0 ? 'Free' : `$${plan.price}`)}
+                      </span>
+                      {plan.period && plan.price > 0 && (
+                        <span className="text-xs text-slate-500 dark:text-slate-400">/{plan.period}</span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      {plan.description || (plan.id === 'free' ? 'Great for small teams & evaluation' : 'For growing companies needing full power')}
+                    </p>
                   </div>
-                  <p className="mt-2 text-xs text-[#64748B]">
-                    {plan.description || (plan.id === 'free' ? 'Great for small teams & evaluation' : 'For growing companies needing full power')}
-                  </p>
+
+                  {/* Features List */}
+                  <ul className="mt-6 space-y-3">
+                    {plan.features?.map((feature, idx) => (
+                      <li key={idx} className="flex items-start gap-2.5 text-xs text-slate-800 dark:text-slate-200">
+                        <svg className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2.2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                    {plan.limitations?.map((lim, idx) => (
+                      <li key={`lim-${idx}`} className="flex items-start gap-2.5 text-xs text-slate-400 dark:text-slate-500">
+                        <svg className="h-4 w-4 shrink-0 text-slate-300 dark:text-slate-600 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        <span>{lim}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
 
-                {/* Features List */}
-                <ul className="mt-6 space-y-3">
-                  {plan.features?.map((feature, idx) => (
-                    <li key={idx} className="flex items-start gap-2.5 text-xs text-[#1E202A]">
-                      <svg className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2.2} viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                      </svg>
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                  {plan.limitations?.map((lim, idx) => (
-                    <li key={`lim-${idx}`} className="flex items-start gap-2.5 text-xs text-gray-400">
-                      <svg className="h-4 w-4 shrink-0 text-gray-300 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                      <span>{lim}</span>
-                    </li>
-                  ))}
-                </ul>
+                {/* Action Button */}
+                <div className="mt-8 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => handleActionClick(plan)}
+                    className={`w-full py-2.5 px-4 text-xs font-semibold rounded-xl transition-all duration-150 cursor-pointer ${
+                      isCurrent
+                        ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 hover:bg-blue-100 dark:hover:bg-blue-900/60'
+                        : isPro
+                        ? 'btn-primary'
+                        : 'btn-secondary'
+                    }`}
+                  >
+                    {isCurrent ? '✓ Active Plan' : isPro ? 'Upgrade to Pro' : 'Switch to Free'}
+                  </button>
+                </div>
               </div>
-
-              {/* Action Button */}
-              <div className="mt-8 pt-4">
-                <button
-                  type="button"
-                  onClick={() => handleActionClick(plan)}
-                  className={`w-full py-2.5 px-4 text-xs font-semibold rounded-xl transition-all duration-150 ${
-                    isCurrent
-                      ? 'bg-[#EEEDFD] text-[#5B4BDB] border border-[#DCD9FA] cursor-pointer hover:bg-[#E5E2FC]'
-                      : isPro
-                      ? 'bg-[#5B4BDB] text-white hover:bg-[#4A3ABF] shadow-xs cursor-pointer'
-                      : 'border border-[#5B4BDB] text-[#5B4BDB] hover:bg-[#EEEDFD] cursor-pointer'
-                  }`}
-                >
-                  {isCurrent ? '✓ Active Plan' : isPro ? 'Upgrade to Pro' : 'Switch to Free'}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Resource Usage Section ── */}
       {usageData && (
-        <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-[#F1F5F9] pb-4">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
             <div>
-              <h3 className="text-base font-semibold text-[#1E202A]">Current Organisation Resource Usage</h3>
-              <p className="text-xs text-[#64748B]">Real-time database counts compared to your current tier limits</p>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">Current Organisation Resource Usage</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Real-time database counts compared to your current tier limits</p>
             </div>
-            <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 border border-blue-200 self-start sm:self-auto">
+            <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-950/60 px-2.5 py-1 text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 self-start sm:self-auto">
               Preliminary Live Tracking
             </span>
           </div>
@@ -194,16 +203,16 @@ function Plans() {
           <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-3">
             {/* Members Usage */}
             {usageData.usage?.members && (
-              <div className="rounded-lg bg-gray-50/70 p-4 border border-gray-100">
+              <div className="rounded-xl bg-slate-50/70 dark:bg-slate-900/70 p-4 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#1E202A]">{usageData.usage.members.label}</span>
-                  <span className="text-[#64748B]">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">{usageData.usage.members.label}</span>
+                  <span className="text-slate-500 dark:text-slate-400">
                     {usageData.usage.members.used} / {usageData.usage.members.limit}
                   </span>
                 </div>
-                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                   <div
-                    className="h-full rounded-full bg-[#5B4BDB]"
+                    className="h-full rounded-full bg-blue-600 dark:bg-blue-500"
                     style={{
                       width: `${Math.min(
                         100,
@@ -217,14 +226,14 @@ function Plans() {
 
             {/* Projects Usage */}
             {usageData.usage?.projects && (
-              <div className="rounded-lg bg-gray-50/70 p-4 border border-gray-100">
+              <div className="rounded-xl bg-slate-50/70 dark:bg-slate-900/70 p-4 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#1E202A]">{usageData.usage.projects.label}</span>
-                  <span className="text-[#64748B]">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">{usageData.usage.projects.label}</span>
+                  <span className="text-slate-500 dark:text-slate-400">
                     {usageData.usage.projects.used} / {usageData.usage.projects.limit}
                   </span>
                 </div>
-                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                   <div
                     className="h-full rounded-full bg-emerald-500"
                     style={{
@@ -240,22 +249,22 @@ function Plans() {
 
             {/* Tasks Usage */}
             {usageData.usage?.tasks && (
-              <div className="rounded-lg bg-gray-50/70 p-4 border border-gray-100">
+              <div className="rounded-xl bg-slate-50/70 dark:bg-slate-900/70 p-4 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#1E202A]">{usageData.usage.tasks.label}</span>
-                  <span className="text-[#64748B]">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">{usageData.usage.tasks.label}</span>
+                  <span className="text-slate-500 dark:text-slate-400">
                     {usageData.usage.tasks.used} / {usageData.usage.tasks.limit}
                   </span>
                 </div>
-                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-gray-200">
-                  <div className="h-full rounded-full bg-blue-500" style={{ width: '100%' }} />
+                <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                  <div className="h-full rounded-full bg-blue-600 dark:bg-blue-500" style={{ width: '100%' }} />
                 </div>
               </div>
             )}
           </div>
 
-          <div className="mt-4 rounded-lg bg-blue-50/60 p-3 text-xs text-blue-700 border border-blue-100 flex items-start gap-2">
-            <svg className="h-4 w-4 shrink-0 text-blue-500 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <div className="mt-4 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 p-3.5 text-xs text-blue-800 dark:text-blue-300 border border-blue-100 dark:border-blue-900/40 flex items-start gap-2.5">
+            <svg className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
             </svg>
             <span>
@@ -268,21 +277,21 @@ function Plans() {
 
       {/* ── Informational Notice Modal ── */}
       {modalMessage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 dark:bg-black/70 backdrop-blur-xs px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#111827] p-6 shadow-xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in-95 duration-100">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#EEEDFD] text-[#5B4BDB]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/60">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
                 </svg>
               </div>
               <div>
-                <h3 className="text-base font-bold text-[#1E202A]">{modalMessage.title}</h3>
-                <p className="text-xs text-[#64748B]">Prototype System Notice</p>
+                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">{modalMessage.title}</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Prototype System Notice</p>
               </div>
             </div>
 
-            <p className="mt-4 text-sm text-[#475569] leading-relaxed">
+            <p className="mt-4 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
               {modalMessage.text}
             </p>
 
@@ -290,7 +299,7 @@ function Plans() {
               <button
                 type="button"
                 onClick={() => setModalMessage(null)}
-                className="btn-primary text-xs py-2 px-4"
+                className="btn-primary text-xs py-2 px-4 cursor-pointer"
               >
                 Understood
               </button>
